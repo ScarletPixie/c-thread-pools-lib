@@ -1,0 +1,282 @@
+#include "ctp.h"
+
+#include <assert.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <pthread.h>
+
+typedef struct _task_queue _task_queue_t;
+static _task_queue_t* _task_queue_create(size_t size);
+static void _task_queue_destroy(_task_queue_t *queue);
+static int _task_queue_push(_task_queue_t *queue, ctp_task_t *task);
+static ctp_task_t* _task_queue_pop(_task_queue_t *queue);
+static bool _task_queue_is_empty(_task_queue_t *queue);
+
+typedef struct
+{
+    pthread_t thread;
+    ctp_task_t *task;
+    ctp_pool_t *pool;
+} _worker;
+
+
+struct ctp_task
+{
+    void (*function)(void *);
+    void *arg;
+
+    pthread_mutex_t mutex;
+    pthread_cond_t tast_completed_cond;
+    
+    bool completed;
+};
+
+typedef struct _task_queue
+{
+    ctp_task_t **tasks;
+    size_t size;
+    size_t current;
+
+    pthread_mutex_t mutex;
+    pthread_cond_t task_cond;
+
+    bool has_work;
+} _task_queue_t;
+
+typedef struct ctp_pool
+{
+    size_t num_workers;
+    _worker *threads;
+    _task_queue_t *queue;
+
+    bool stopping;
+
+} ctp_pool_t;
+
+static void* _routine(void* arg)
+{
+    _worker * const worker = (_worker *)arg;
+
+    pthread_mutex_lock(&worker->pool->queue->mutex);
+    while (!worker->pool->stopping)
+    {
+        while (_task_queue_is_empty(worker->pool->queue) && !worker->pool->stopping)
+            pthread_cond_wait(&worker->pool->queue->task_cond, &worker->pool->queue->mutex);
+
+        if (worker->pool->stopping)
+            break;
+
+        worker->task = _task_queue_pop(worker->pool->queue);
+        pthread_mutex_unlock(&worker->pool->queue->mutex);
+
+        if (worker->task)
+        {
+            worker->task->function(worker->task->arg);
+
+            pthread_mutex_lock(&worker->task->mutex);
+            worker->task->completed = true;
+            pthread_cond_signal(&worker->task->tast_completed_cond);
+            pthread_mutex_unlock(&worker->task->mutex);
+        }
+
+        pthread_mutex_lock(&worker->pool->queue->mutex);
+    }
+
+    pthread_mutex_unlock(&worker->task->mutex);
+    return NULL;
+}
+
+
+ctp_pool_t *ctp_pool_create(size_t num_workers, size_t queue_size)
+{
+    ctp_pool_t *pool = malloc(sizeof(*pool));
+    if (!pool)
+        return NULL;
+
+    pool->num_workers = num_workers;
+    pool->stopping = false;
+
+    pool->queue = _task_queue_create(queue_size);
+    if (!pool->queue)
+    {
+        free(pool);
+        return NULL;
+    }
+
+    pool->threads = malloc(sizeof(_worker) * num_workers);
+    if (!pool->threads)
+    {
+        _task_queue_destroy(pool->queue);
+        free(pool);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < num_workers; ++i)
+    {
+        if (pthread_create(&pool->threads[i].thread, NULL, _routine, &pool->threads[i]) != 0)
+        {
+            for (size_t j = 0; j < i; ++j)
+                pthread_join(pool->threads[j].thread, NULL);
+            _task_queue_destroy(pool->queue);
+            free(pool->threads);
+            free(pool);
+            return NULL;
+        }
+        pool->threads[i].pool = pool;
+        pool->threads[i].task = NULL;
+    }
+
+    return pool;
+}
+
+int ctp_submit_task(ctp_pool_t *pool, ctp_task_t* task)
+{
+    assert(pool != NULL && task != NULL);
+
+    if (_task_queue_push(pool->queue, task) != 0)
+        return -1;
+
+    return 0;
+}
+
+void ctp_wait_task(ctp_task_t *task)
+{
+    assert(task != NULL);
+
+    pthread_mutex_lock(&task->mutex);
+    while (!task->completed)
+        pthread_cond_wait(&task->tast_completed_cond, &task->mutex);
+    pthread_mutex_unlock(&task->mutex);
+}
+
+void ctp_pool_destroy(ctp_pool_t *pool)
+{
+    if (!pool)
+        return;
+
+    pool->stopping = true;
+
+    pthread_mutex_lock(&pool->queue->mutex);
+    pool->stopping = true;
+    pthread_cond_broadcast(&pool->queue->task_cond);
+    pthread_mutex_unlock(&pool->queue->mutex);
+
+    for (size_t i = 0; i < pool->num_workers; ++i)
+        pthread_join(pool->threads[i].thread, NULL);
+
+    _task_queue_destroy(pool->queue);
+    free(pool->threads);
+    free(pool);
+}
+
+ctp_task_t *ctp_task_create(void (*function)(void *), void *arg)
+{
+    assert(function != NULL);
+
+    ctp_task_t *task = malloc(sizeof(*task));
+    if (!task)
+        return NULL;
+
+    task->arg = arg;
+    task->function = function;
+    task->completed = false;
+
+    pthread_mutex_init(&task->mutex, NULL);
+    pthread_cond_init(&task->tast_completed_cond, NULL);
+
+    return task;
+}
+void ctp_task_destroy(ctp_task_t *task)
+{
+    if (!task)
+        return;
+
+    pthread_mutex_destroy(&task->mutex);
+    pthread_cond_destroy(&task->tast_completed_cond);
+    free(task);
+}
+
+static int _task_queue_push(_task_queue_t *queue, ctp_task_t *task)
+{
+    assert(queue != NULL && task != NULL);
+
+    pthread_mutex_lock(&queue->mutex);
+
+    if (queue->current >= queue->size)
+    {
+        pthread_mutex_unlock(&queue->mutex);
+        return -1; // Queue is full
+    }
+
+    queue->tasks[queue->current++] = task;
+    queue->has_work = true;
+
+    pthread_cond_signal(&queue->task_cond);
+    pthread_mutex_unlock(&queue->mutex);
+
+    return 0;
+}
+
+static ctp_task_t* _task_queue_pop(_task_queue_t *queue)
+{
+    assert(queue != NULL);
+
+    pthread_mutex_lock(&queue->mutex);
+
+    if (queue->current == 0 && !queue->has_work)
+    {
+        pthread_mutex_unlock(&queue->mutex);
+        return NULL; // Queue is empty
+    }
+
+    ctp_task_t *current_task = queue->tasks[--queue->current];
+
+    if (queue->current == 0)
+        queue->has_work = false;
+
+    pthread_mutex_unlock(&queue->mutex);
+    return current_task;
+}
+
+static _task_queue_t* _task_queue_create(size_t size)
+{
+    _task_queue_t *queue = malloc(sizeof(*queue));
+    if (!queue)
+        return NULL;
+
+    queue->tasks = malloc(sizeof(ctp_task_t *) * size);
+    if (!queue->tasks)
+    {
+        free(queue);
+        return NULL;
+    }
+
+    queue->size = size;
+    queue->current = 0;
+
+    pthread_mutex_init(&queue->mutex, NULL);
+    pthread_cond_init(&queue->task_cond, NULL);
+
+    return queue;
+}
+
+static void _task_queue_destroy(_task_queue_t *queue)
+{
+    if (!queue)
+        return;
+
+    free(queue->tasks);
+    pthread_mutex_destroy(&queue->mutex);
+    pthread_cond_destroy(&queue->task_cond);
+    free(queue);
+}
+static bool _task_queue_is_empty(_task_queue_t *queue)
+{
+    assert(queue != NULL);
+
+    pthread_mutex_lock(&queue->mutex);
+    bool is_empty = (queue->current == 0 && !queue->has_work);
+    pthread_mutex_unlock(&queue->mutex);
+
+    return is_empty;
+}
