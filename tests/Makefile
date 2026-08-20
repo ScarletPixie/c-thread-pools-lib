@@ -17,4 +17,6 @@ test: $(TEST_BIN)
 clean:
 	rm -f $(TEST_BIN)
 
-.PHONY: all test clean
+re: clean all
+
+.PHONY: all test clean re
