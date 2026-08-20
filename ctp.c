@@ -31,8 +31,10 @@ struct ctp_task
     pthread_mutex_t mutex;
     pthread_cond_t task_completed_cond;
     bool completed;
-};
 
+    size_t ref_count;
+};
+static void _ctp_task_release(ctp_task_t *task);
 
 typedef struct ctp_pool
 {
@@ -45,6 +47,7 @@ typedef struct ctp_pool
     pthread_cond_t task_cond;
 
 } ctp_pool_t;
+
 
 static void* _routine(void* arg)
 {
@@ -62,6 +65,8 @@ static void* _routine(void* arg)
             break;
         }
 
+        void (*release_handler)(ctp_task_t *) = worker->pool->stopping ? ctp_task_destroy : _ctp_task_release;
+
         worker->task = _task_queue_pop(worker->pool->queue);
         pthread_mutex_unlock(&worker->pool->mutex);
 
@@ -73,6 +78,7 @@ static void* _routine(void* arg)
         worker->task->completed = true;
         pthread_cond_signal(&worker->task->task_completed_cond);
         pthread_mutex_unlock(&worker->task->mutex);
+        release_handler(worker->task);
         worker->task = NULL;
     }
 
@@ -150,6 +156,7 @@ void ctp_wait_task(ctp_task_t *task)
     while (!task->completed)
         pthread_cond_wait(&task->task_completed_cond, &task->mutex);
     pthread_mutex_unlock(&task->mutex);
+    _ctp_task_release(task);
 }
 
 void ctp_pool_destroy(ctp_pool_t *pool)
@@ -185,8 +192,22 @@ ctp_task_t *ctp_task_create(void (*function)(void *), void *arg)
     pthread_mutex_init(&task->mutex, NULL);
     pthread_cond_init(&task->task_completed_cond, NULL);
 
+    task->ref_count = 2; // One for the worker and one for the waiter
+
     return task;
 }
+
+static void _ctp_task_release(ctp_task_t *task)
+{
+    task->ref_count--;
+    if (task->ref_count == 0)
+    {
+        pthread_cond_destroy(&task->task_completed_cond);
+        free(task);
+        return;
+    }
+}
+
 void ctp_task_destroy(ctp_task_t *task)
 {
     if (!task)
