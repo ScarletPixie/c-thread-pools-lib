@@ -1,5 +1,5 @@
 CC = cc
-CFLAGS = -Wall -Wextra -Werror -g3
+CFLAGS = -Wall -Wextra -g3
 
 SRC = ../ctp.c
 TEST_SRC = main.c

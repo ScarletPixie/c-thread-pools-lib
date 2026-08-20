@@ -35,8 +35,9 @@ ctp_pool_t *ctp_pool_create(size_t num_workers, size_t queue_size);
 int ctp_submit_task(ctp_pool_t *pool, ctp_task_t* task);
 
 /// @brief Wait for a task to complete.
+/// @param pool A pointer to the thread pool.
 /// @param task A pointer to the task to wait for.
-void ctp_wait_task(ctp_task_t *task);
+void ctp_wait_task(ctp_pool_t *pool, ctp_task_t *task);
 
 
 ///@brief Submit a task to the thread pool for execution.

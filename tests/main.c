@@ -40,12 +40,13 @@ TEST test_ctp_pool_basic(void)
     ctp_task_t* task = ctp_task_create(incrementor_task, &counter); ASSERT(task != NULL);
 
     ASSERT_EQ(0, ctp_submit_task(pool, task));
+    ASSERT_EQ(0, ctp_submit_task(pool, ctp_task_create(incrementor_task, &counter)));
 
 
+    ctp_wait_task(pool, task);
     ctp_pool_destroy(pool);
 
-
-    ASSERT_EQ(1, counter);
+    ASSERT_EQ(2, counter);
     PASS();
 }
 

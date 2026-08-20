@@ -22,6 +22,15 @@ typedef struct
     ctp_pool_t *pool;
 } _worker;
 
+typedef struct _task_queue
+{
+    ctp_task_t **tasks;
+    size_t size;
+    size_t current;
+
+    bool has_work;
+} _task_queue_t;
+
 
 struct ctp_task
 {
@@ -65,8 +74,6 @@ static void* _routine(void* arg)
             break;
         }
 
-        void (*release_handler)(ctp_task_t *) = worker->pool->stopping ? ctp_task_destroy : _ctp_task_release;
-
         worker->task = _task_queue_pop(worker->pool->queue);
         pthread_mutex_unlock(&worker->pool->mutex);
 
@@ -77,8 +84,8 @@ static void* _routine(void* arg)
         pthread_mutex_lock(&worker->task->mutex);
         worker->task->completed = true;
         pthread_cond_signal(&worker->task->task_completed_cond);
+        _ctp_task_release(worker->task);
         pthread_mutex_unlock(&worker->task->mutex);
-        release_handler(worker->task);
         worker->task = NULL;
     }
 
@@ -148,13 +155,27 @@ int ctp_submit_task(ctp_pool_t *pool, ctp_task_t* task)
     return 0;
 }
 
-void ctp_wait_task(ctp_task_t *task)
+void ctp_wait_task(ctp_pool_t *pool, ctp_task_t *task)
 {
-    assert(task != NULL);
+    if (!pool || !task)
+        return;
+
+    ctp_task_t** task_slot = NULL;
+    for (size_t i = 0; i < pool->queue->size; ++i)
+    {
+        if (pool->queue->tasks[i] == task)
+        {
+            task_slot = &pool->queue->tasks[i];
+            break;
+        }
+    }
+    if (!task_slot)
+        return;
 
     pthread_mutex_lock(&task->mutex);
     while (!task->completed)
         pthread_cond_wait(&task->task_completed_cond, &task->mutex);
+    *task_slot = NULL;
     pthread_mutex_unlock(&task->mutex);
     _ctp_task_release(task);
 }
@@ -168,6 +189,12 @@ void ctp_pool_destroy(ctp_pool_t *pool)
     pool->stopping = true;
     pthread_cond_broadcast(&pool->task_cond);
     pthread_mutex_unlock(&pool->mutex);
+
+    for (size_t i = 0; i < pool->queue->size; ++i)
+    {
+        if (pool->queue->tasks[i])
+            ctp_wait_task(pool, pool->queue->tasks[i]);
+    }
 
     for (size_t i = 0; i < pool->num_workers; ++i)
         pthread_join(pool->threads[i].thread, NULL);
@@ -199,11 +226,13 @@ ctp_task_t *ctp_task_create(void (*function)(void *), void *arg)
 
 static void _ctp_task_release(ctp_task_t *task)
 {
+    if (!task)
+        return;
+
     task->ref_count--;
     if (task->ref_count == 0)
     {
-        pthread_cond_destroy(&task->task_completed_cond);
-        free(task);
+        ctp_task_destroy(task);
         return;
     }
 }
@@ -218,15 +247,6 @@ void ctp_task_destroy(ctp_task_t *task)
     free(task);
 }
 
-
-typedef struct _task_queue
-{
-    ctp_task_t **tasks;
-    size_t size;
-    size_t current;
-
-    bool has_work;
-} _task_queue_t;
 
 static int _task_queue_push(_task_queue_t *queue, ctp_task_t *task)
 {
@@ -262,7 +282,7 @@ static _task_queue_t* _task_queue_create(size_t size)
     if (!queue)
         return NULL;
 
-    queue->tasks = malloc(sizeof(ctp_task_t *) * size);
+    queue->tasks = calloc(size, sizeof(ctp_task_t *));
     if (!queue->tasks)
     {
         free(queue);
