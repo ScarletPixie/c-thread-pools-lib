@@ -17,12 +17,12 @@ typedef struct ctp_task ctp_task_t;
 /// @param function The function to be executed.
 /// @param arg The argument to be passed to the function.
 /// @return A pointer to the newly created task, or NULL if creation failed.
-ctp_task_t *ctp_task_create(void (*function)(void *), void *arg);
+ctp_task_t *ctp_task_create(void (*function)(void *), void* arg);
 
 /// @brief Destroy a task and free its resources.
 /// @param task A pointer to the task to be destroyed.
 /// @note Should not be called on a submitted task.
-void ctp_task_destroy(ctp_task_t *task);
+void ctp_task_destroy(ctp_task_t* task);
 
 /// @}
 
@@ -41,7 +41,7 @@ ctp_pool_t *ctp_pool_create(size_t num_workers, size_t queue_size);
 
 ///@brief Submit a task to the thread pool for execution.
 ///@param pool A pointer to the thread pool.
-void ctp_pool_destroy(ctp_pool_t *pool);
+void ctp_pool_destroy(ctp_pool_t* pool);
 
 /// @}
 
@@ -54,12 +54,16 @@ void ctp_pool_destroy(ctp_pool_t *pool);
 ///@param pool A pointer to the thread pool.
 ///@param task A pointer to the task to be submitted.
 ///@return 0 if the task was successfully submitted, or a non-zero value if submission failed.
-int ctp_submit_task(ctp_pool_t *pool, ctp_task_t* task);
+int ctp_submit_task(ctp_pool_t* pool, ctp_task_t* task);
 
 /// @brief Wait for a task to complete.
 /// @param pool A pointer to the thread pool.
 /// @param task A pointer to the task to wait for.
-void ctp_wait_task(ctp_pool_t *pool, ctp_task_t *task);
+void ctp_wait_task(ctp_pool_t* pool, ctp_task_t* task);
+
+/// @brief Waits for all pending tasks inside the pool.
+/// @param pool A pointer to the thread pool.
+void ctp_wait_all(ctp_pool_t* pool);
 
 /// @}
 
