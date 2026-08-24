@@ -41,7 +41,7 @@ struct ctp_task
     pthread_cond_t task_completed_cond;
     bool completed;
 
-    size_t ref_count;
+    atomic_uint ref_count;
 };
 static void _ctp_task_release(ctp_task_t *task);
 
@@ -84,8 +84,8 @@ static void* _routine(void* arg)
         pthread_mutex_lock(&worker->task->mutex);
         worker->task->completed = true;
         pthread_cond_signal(&worker->task->task_completed_cond);
-        _ctp_task_release(worker->task);
         pthread_mutex_unlock(&worker->task->mutex);
+        _ctp_task_release(worker->task);
         worker->task = NULL;
     }
 
@@ -172,6 +172,7 @@ void ctp_wait_task(ctp_pool_t *pool, ctp_task_t *task)
     if (!task_slot)
         return;
 
+
     pthread_mutex_lock(&task->mutex);
     while (!task->completed)
         pthread_cond_wait(&task->task_completed_cond, &task->mutex);
@@ -229,12 +230,8 @@ static void _ctp_task_release(ctp_task_t *task)
     if (!task)
         return;
 
-    task->ref_count--;
-    if (task->ref_count == 0)
-    {
+    if (task->ref_count-- == 0)
         ctp_task_destroy(task);
-        return;
-    }
 }
 
 void ctp_task_destroy(ctp_task_t *task)
