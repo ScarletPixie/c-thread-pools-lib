@@ -56,6 +56,13 @@ void ctp_pool_destroy(ctp_pool_t* pool);
 ///@return 0 if the task was successfully submitted, or a non-zero value if submission failed.
 int ctp_submit_task(ctp_pool_t* pool, ctp_task_t* task);
 
+///@brief Submit the same task to the thread pool for N execution times.
+///@param pool A pointer to the thread pool.
+///@param task A pointer to the task to be submitted.
+///@param n The number of times the inserted task must be executed. Must not be 0 or bigger than the pool queue size.
+///@return 0 if the task was successfully submitted, or a non-zero value if submission failed.
+int ctp_submit_task_n(ctp_pool_t* pool, ctp_task_t* task, size_t n);
+
 /// @brief Wait for a task to complete.
 /// @param pool A pointer to the thread pool.
 /// @param task A pointer to the task to wait for.

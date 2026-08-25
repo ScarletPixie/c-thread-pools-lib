@@ -14,6 +14,10 @@ static void _task_queue_destroy(_task_queue_t *queue);
 static int _task_queue_push(_task_queue_t *queue, ctp_task_t *task);
 static ctp_task_t* _task_queue_pop(_task_queue_t *queue);
 static bool _task_queue_is_empty(_task_queue_t *queue);
+static bool _task_queue_full(_task_queue_t *queue);
+static ctp_task_t* _task_queue_search(_task_queue_t *queue, ctp_task_t* task);
+static size_t _task_queue_remaining_slots(_task_queue_t *queue);
+
 
 typedef struct
 {
@@ -39,8 +43,8 @@ struct ctp_task
 
     pthread_mutex_t mutex;
     pthread_cond_t task_completed_cond;
-    bool completed;
 
+    atomic_uint remaining;
     atomic_uint ref_count;
 };
 static void _ctp_task_release(ctp_pool_t* pool, ctp_task_t *task);
@@ -76,6 +80,12 @@ static void* _routine(void* arg)
             break;
         }
 
+        if (_task_queue_full(worker->pool->active))
+        {
+            pthread_mutex_unlock(&worker->pool->mutex);
+            continue;
+        }
+        
         worker->task = _task_queue_pop(worker->pool->queue);
         assert(worker->task != NULL);
         _task_queue_push(worker->pool->active, worker->task);
@@ -84,8 +94,8 @@ static void* _routine(void* arg)
         worker->task->function(worker->task->arg);
 
         pthread_mutex_lock(&worker->task->mutex);
-        worker->task->completed = true;
-        pthread_cond_signal(&worker->task->task_completed_cond);
+        if (atomic_fetch_sub(&worker->task->remaining, 1) == 1)
+            pthread_cond_signal(&worker->task->task_completed_cond);
         pthread_mutex_unlock(&worker->task->mutex);
         _ctp_task_release(worker->pool, worker->task);
         worker->task = NULL;
@@ -149,14 +159,39 @@ int ctp_submit_task(ctp_pool_t *pool, ctp_task_t* task)
     assert(pool != NULL && task != NULL);
 
     pthread_mutex_lock(&pool->mutex);
+    if (_task_queue_full(pool->queue) || _task_queue_full(pool->active))
+        return -1;
     if (_task_queue_push(pool->queue, task) != 0)
     {
         pthread_mutex_unlock(&pool->mutex);
         return -1;
     }
+    atomic_fetch_add(&task->remaining, 1);
     pthread_cond_signal(&pool->task_cond);
     pthread_mutex_unlock(&pool->mutex);
 
+    return 0;
+}
+
+int ctp_submit_task_n(ctp_pool_t* pool, ctp_task_t* task, size_t n)
+{
+    assert(pool != NULL && task != NULL);
+
+    pthread_mutex_lock(&pool->mutex);
+    if (n == 0 || _task_queue_remaining_slots(pool->queue) < n || _task_queue_full(pool->queue) || _task_queue_full(pool->active))
+        return -1;
+
+    for (size_t i = 0; i < n; ++i)
+    {
+        if (_task_queue_push(pool->queue, task) != 0)
+        {
+            pthread_mutex_unlock(&pool->mutex);
+            return -1;
+        }
+        atomic_fetch_add(&task->remaining, 1);
+    }
+    pthread_cond_broadcast(&pool->task_cond);
+    pthread_mutex_unlock(&pool->mutex);
     return 0;
 }
 
@@ -166,29 +201,55 @@ void ctp_wait_task(ctp_pool_t *pool, ctp_task_t *task)
     if (!pool || !task)
         return;
 
+    pthread_mutex_lock(&pool->mutex);
+    if (!_task_queue_search(pool->queue, task) && !_task_queue_search(pool->active, task))
+    {
+        pthread_mutex_unlock(&pool->mutex);
+        return;
+    }
+    pthread_mutex_unlock(&pool->mutex);
+
     pthread_mutex_lock(&task->mutex);
-    while (!task->completed)
+    while (task->remaining != 0)
         pthread_cond_wait(&task->task_completed_cond, &task->mutex);
     pthread_mutex_unlock(&task->mutex);
     _ctp_task_release(pool, task);
 }
+void ctp_wait_all(ctp_pool_t* pool)
+{
+    if (!pool)
+        return;
+
+    while (true)
+    {
+        ctp_task_t* next_active = NULL;
+        ctp_task_t* next_pending = NULL;
+
+        pthread_mutex_lock(&pool->mutex);
+        next_active = pool->active->tasks[pool->active->current - pool->active->current != 0];
+        next_pending = pool->queue->tasks[pool->queue->current - pool->active->current != 0];
+        pthread_mutex_unlock(&pool->mutex);
+
+        if (!next_active && !next_pending)
+            break;
+
+        ctp_wait_task(pool, next_active);
+        ctp_wait_task(pool, next_pending);
+    }
+}
+
 
 void ctp_pool_destroy(ctp_pool_t *pool)
 {
     if (!pool)
         return;
 
+    ctp_wait_all(pool);
+
     pthread_mutex_lock(&pool->mutex);
     pool->stopping = true;
     pthread_cond_broadcast(&pool->task_cond);
     pthread_mutex_unlock(&pool->mutex);
-
-    for (size_t i = 0; i < pool->active->size; ++i)
-    {
-        if (pool->active->tasks[i])
-            ctp_wait_task(pool, pool->active->tasks[i]);
-    }
-
     for (size_t i = 0; i < pool->num_workers; ++i)
         pthread_join(pool->workers[i].thread, NULL);
 
@@ -208,7 +269,7 @@ ctp_task_t *ctp_task_create(void (*function)(void *), void *arg)
 
     task->arg = arg;
     task->function = function;
-    task->completed = false;
+    task->remaining = 0;
 
     pthread_mutex_init(&task->mutex, NULL);
     pthread_cond_init(&task->task_completed_cond, NULL);
@@ -223,7 +284,7 @@ static void _ctp_task_release(ctp_pool_t* pool, ctp_task_t *task)
     if (!task)
         return;
 
-    if (task->ref_count-- == 0)
+    if (atomic_fetch_sub(&task->ref_count, 1) == 1)
     {
         pthread_mutex_lock(&pool->mutex);
         for (size_t i = 0; i < pool->active->size; i++)
@@ -267,7 +328,7 @@ static ctp_task_t* _task_queue_pop(_task_queue_t *queue)
     assert(queue != NULL);
 
     if (queue->current == 0 && !queue->has_work)
-        return NULL; // Queue is empty
+        return NULL;
 
     ctp_task_t *current_task = queue->tasks[--queue->current];
 
@@ -317,4 +378,22 @@ static bool _task_queue_is_empty(_task_queue_t *queue)
     bool is_empty = (queue->current == 0 && !queue->has_work);
 
     return is_empty;
+}
+
+static bool _task_queue_full(_task_queue_t *queue)
+{
+    return queue->current >= queue->size;
+}
+static ctp_task_t* _task_queue_search(_task_queue_t *queue, ctp_task_t* task)
+{
+    for (size_t i = 0; i < queue->size; ++i)
+    {
+        if (queue->tasks[i] == task)
+            return queue->tasks[i];
+    }
+    return NULL;
+}
+static size_t _task_queue_remaining_slots(_task_queue_t *queue)
+{
+    return queue->size - queue->current;
 }

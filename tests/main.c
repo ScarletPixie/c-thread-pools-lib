@@ -84,17 +84,12 @@ TEST test_ctp_pool_concurency(void)
     const size_t slack_ns = expected_ns * 1.20;
 
     const uint64_t start = monotonic_ns();
-    ctp_task_t* tasks[64] = {NULL};
-    for (size_t i = 0; i < task_count; i++)
-    {
-        tasks[i] = ctp_task_create(sleep_task, (size_t*)&sleep_us);
-        ctp_submit_task(pool, tasks[i]);
-    }
+    ctp_task_t* task = ctp_task_create(sleep_task, (size_t*)&sleep_us);
+    ASSERT_EQ(0, ctp_submit_task_n(pool, task, task_count));
     const uint64_t end = monotonic_ns();
 
 
-    for (size_t i = 0; i < task_count; i++)
-        ctp_wait_task(pool, tasks[i]);
+    ctp_wait_all(pool);
     const uint64_t elapsed = end - start;
 
     printf("elapsed: %zu, maximum: %zu", elapsed, slack_ns);
