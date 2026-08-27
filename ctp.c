@@ -92,9 +92,6 @@ struct ctp_task
     atomic_uint ref_count;
 };
 
-ctp_task_t*     ctp_task_create(void (*function)(void *), void* arg);
-void            ctp_task_destroy(ctp_task_t* task);
-
 /// @brief Releases a reference to a task destroying it when the reference count reaches 0.
 static void     _ctp_task_release(ctp_pool_t* pool, ctp_task_t *task);
 
@@ -118,11 +115,6 @@ typedef struct ctp_pool
     pthread_cond_t cond;
 
 } ctp_pool_t;
-
-int ctp_submit_task(ctp_pool_t* pool, ctp_task_t* task);
-int ctp_submit_task_n(ctp_pool_t* pool, ctp_task_t* task, size_t n);
-void ctp_wait_task(ctp_pool_t* pool, ctp_task_t* task);
-void ctp_wait_all(ctp_pool_t* pool);
 
 /// @}
 

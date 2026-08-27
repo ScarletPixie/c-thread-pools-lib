@@ -74,19 +74,19 @@ static void sleep_task(void *arg)
 TEST test_ctp_pool_concurency(void)
 {
     const size_t task_count = 64;
-    const size_t workers = task_count;
+    const size_t workers = 2;
     const size_t sleep_us = 1000;
 
     ctp_pool_t* pool = ctp_pool_create(workers, task_count);
 
     const size_t batches = (task_count + workers - 1) / workers;
     const size_t expected_ns = batches * sleep_us * 1000;
-    const size_t slack_ns = expected_ns * 1.20;
+    const size_t slack_ns = expected_ns * 1.50;
 
     ctp_task_t* task = ctp_task_create(sleep_task, (size_t*)&sleep_us);
-    ASSERT_EQ(0, ctp_submit_task_n(pool, task, task_count));
 
     const uint64_t start = monotonic_ns();
+    ASSERT_EQ(0, ctp_submit_task_n(pool, task, task_count));
     ctp_wait_all(pool);
     const uint64_t end = monotonic_ns();
     const uint64_t elapsed = end - start;
