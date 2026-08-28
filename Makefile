@@ -1,7 +1,7 @@
 CC := cc
 CFLAGS := -Wall -Wextra -Werror -MMD -MP -O2
 
-NAME := ctp
+NAME := libctp
 
 BUILD ?= ./build
 BUILD := $(patsubst %/,%,$(BUILD))
@@ -28,7 +28,7 @@ $(BUILD)/%.o: %.c
 
 
 clean:
-	rm -rf $(BUILD)/objs $(BUILD)/deps
+	rm -rf $(DEPS) $(OBJS)
 
 fclean: clean
 	rm -f $(STATIC) $(SHARED)
