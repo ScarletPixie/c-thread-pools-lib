@@ -75,7 +75,7 @@ TEST test_ctp_pool_concurency(void)
 {
     const size_t task_count = 64;
     const size_t workers = 2;
-    const size_t sleep_us = 1000;
+    const size_t sleep_us = 5000;
 
     ctp_pool_t* pool = ctp_pool_create(workers, task_count);
 
@@ -91,9 +91,9 @@ TEST test_ctp_pool_concurency(void)
     const uint64_t end = monotonic_ns();
     const uint64_t elapsed = end - start;
 
-    ASSERT_LTE(elapsed, slack_ns);
-
     ctp_pool_destroy(pool);
+
+    ASSERT_LTE(elapsed, slack_ns);
     PASS();
 }
 

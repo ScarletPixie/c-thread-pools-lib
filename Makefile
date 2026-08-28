@@ -17,6 +17,9 @@ DEPS := $(OBJS:.o=.d)
 
 all: $(STATIC) $(SHARED)
 
+test:
+	make --no-print-directory -C ./tests test
+
 $(STATIC): $(OBJS)
 	ar rcs $@ $^
 $(SHARED): $(OBJS)
@@ -36,3 +39,5 @@ fclean: clean
 re: fclean all
 
 -include $(DEPS)
+
+.PHONY: all fclean clean re test
