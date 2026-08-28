@@ -39,7 +39,7 @@ typedef struct ctp_pool ctp_pool_t;
 ///@return A pointer to the newly created thread pool, or NULL if creation failed.
 ctp_pool_t *ctp_pool_create(size_t num_workers, size_t queue_size);
 
-///@brief Submit a task to the thread pool for execution.
+///@brief Destroys the thread pool and after waiting for all pending tasks.
 ///@param pool A pointer to the thread pool.
 void ctp_pool_destroy(ctp_pool_t* pool);
 
@@ -61,15 +61,18 @@ int ctp_submit_task(ctp_pool_t* pool, ctp_task_t* task);
 ///@param task A pointer to the task to be submitted.
 ///@param n The number of times the inserted task must be executed. Must not be 0 or bigger than the pool queue size.
 ///@return 0 if the task was successfully submitted, or a non-zero value if submission failed.
+///@note It will always either submit the task `n` times on success or 0 times on error.
 int ctp_submit_task_n(ctp_pool_t* pool, ctp_task_t* task, size_t n);
 
 /// @brief Wait for a task to complete.
 /// @param pool A pointer to the thread pool.
 /// @param task A pointer to the task to wait for.
+/// @note After successfully waiting for a task, the task will be destroyed and should not be used again.
 void ctp_wait_task(ctp_pool_t* pool, ctp_task_t* task);
 
 /// @brief Waits for all pending tasks inside the pool.
 /// @param pool A pointer to the thread pool.
+/// @note After finishing, any reference to a previously submitted task will be freed.
 void ctp_wait_all(ctp_pool_t* pool);
 
 /// @}
